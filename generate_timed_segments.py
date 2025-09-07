@@ -227,11 +227,10 @@ def generate_subtitle_from_script(
 
     # 4) 세그먼트 타이밍
     segments: List[Dict] = []
-     _ensure_alignment(segments, final_mix, tol=0.03)
 
     cur = 0.0
     for p, text, ssml in zip(chunk_paths, clause_lines, ssml_lines):
-        dur = _probe_duration(wav)
+        dur = _probe_duration(p)
         if dur <= 0.0:
             dur = max(0.6, min(8.0, len(text) / 7.0))
 
@@ -247,6 +246,8 @@ def generate_subtitle_from_script(
             }
         )
         cur = end
+
+     _ensure_alignment(segments, final_mix, tol=0.03)
 
     # 5) ASS
     generate_ass_subtitle(
