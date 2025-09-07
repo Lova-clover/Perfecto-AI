@@ -41,8 +41,6 @@ def run_job(job):
             provider=job.get("tts_provider", "polly"),
             template=job.get("voice_template", "default"),
             polly_voice_key=job.get("polly_voice_key", "korean_female1"),
-            subtitle_lang=job.get("subtitle_lang", "ko"),
-            translate_only_if_english=job.get("translate_only_if_english", False),
             strip_trailing_punct_last=True,
         )
 
