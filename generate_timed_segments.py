@@ -1,13 +1,11 @@
 
-from deep_translator import GoogleTranslator
-from ssml_converter import convert_lines_to_ssml_batch, breath_linebreaks_batch, koreanize_if_english
+from ssml_converter import convert_lines_to_ssml_batch, breath_linebreaks_batch
 from html import escape as _xml_escape
 # generate_timed_segments.py
 import os
 import re, math
 from elevenlabs_tts import generate_tts
 from pydub import AudioSegment
-import kss
 import boto3, json
 from elevenlabs_tts import TTS_POLLY_VOICES 
 from botocore.exceptions import ClientError
@@ -459,32 +457,6 @@ SUBTITLE_TEMPLATES = {
     }
 }
 
-def _looks_english(text: str) -> bool:
-    # 매우 단순한 휴리스틱: 알파벳이 한글보다 확실히 많으면 영어로 간주
-    letters = len(re.findall(r'[A-Za-z]', text))
-    hangul = len(re.findall(r'[\uac00-\ud7a3]', text))
-    return letters >= max(3, hangul * 2)
-
-def _detect_script_language(lines):
-    eng = sum(_looks_english(x) for x in lines)
-    kor = sum(bool(re.search(r'[\uac00-\ud7a3]', x)) for x in lines)
-    return 'en' if eng > kor else 'ko'
-
-def _maybe_translate_lines(lines, target='ko', only_if_src_is_english=True):
-    if not lines:
-        return lines
-    try:
-        src = _detect_script_language(lines)
-        if only_if_src_is_english and src != 'en':
-            # 원문이 영어가 아닐 때는 건드리지 않음
-            return lines
-        if target is None or target == src:
-            return lines
-        tr = GoogleTranslator(source='auto', target=target)
-        return [tr.translate(l) if l.strip() else l for l in lines]
-    except Exception:
-        # 번역 실패 시 원문 유지 (크래시 방지)
-        return lines
 
 def _validate_ssml(text: str) -> str:
     """
@@ -1027,8 +999,6 @@ def generate_subtitle_from_script(
     provider: str = "polly",
     template: str = "default",
     polly_voice_key: str = "korean_female1",
-    subtitle_lang: str = "ko",
-    translate_only_if_english: bool = False,
     strip_trailing_punct_last: bool = True,
 ):
     """
@@ -1045,9 +1015,8 @@ def generate_subtitle_from_script(
     if not base_lines:
         return [], None, ass_path
 
-    # 2) SSML 변환 (배치 1회 호출, 원문은 그대로 보존, 발화용만 변환)
-    ssml_input_lines = [koreanize_if_english(ln) for ln in base_lines]
-    ssml_list = convert_lines_to_ssml_batch(ssml_input_lines)
+    # 2) SSML 변환 (배치 1회 호출, 원문은 그대로 보존, 발화용만 변환)    
+    ssml_list = convert_lines_to_ssml_batch(base_lines)
 
     # 안전성 보정
     safe_ssml_list = []
