@@ -112,13 +112,13 @@ def run_job(job: Dict[str, Any]) -> Optional[str]:
     print("🗣️ [runner] 세그먼트/ASS 생성...")
     try:
         segments, audio_clips, ass_path = generate_subtitle_from_script(
-            script_text,
-            ass_path,
+            script_text=script_text,
+            ass_path=ass_path,
             provider="polly",
             template="default",
-            polly_voice_key=polly_voice_key,
+            polly_voice_key=job.get("polly_voice_key", "korean_female1"),
             strip_trailing_punct_last=True,
-            pre_split_lines=clause_lines,
+            pre_split_lines=clause_lines,   # ✅ 여기서도 전달
         )
     except Exception as e:
         print(f"❌ 세그먼트 생성 실패: {e}")
