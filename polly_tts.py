@@ -1,15 +1,12 @@
 # polly_tts.py
 from __future__ import annotations
 import os
+import subprocess
 from typing import List, Optional
-import io
 
 import boto3
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
-
-# moviepy로 오디오 이어붙이기
-from moviepy.editor import AudioFileClip, concatenate_audioclips
 
 try:
     import streamlit as st
@@ -25,7 +22,6 @@ TTS_POLLY_VOICES = {
 }
 
 def _get_env(name: str, default: Optional[str] = None) -> Optional[str]:
-    # st.secrets 우선, 없으면 OS env
     if _SECRETS and name in _SECRETS:
         return _SECRETS.get(name)
     return os.getenv(name, default)
@@ -45,7 +41,6 @@ def _get_polly_client():
             config=cfg,
         )
     else:
-        # 크레덴셜은 인스턴스 프로파일/기본 설정에서 찾음
         return boto3.client("polly", region_name=region, config=cfg)
 
 def synthesize_lines_polly(
@@ -79,33 +74,66 @@ def synthesize_lines_polly(
                 raise RuntimeError("No AudioStream in Polly response")
             with open(out_path, "wb") as f:
                 f.write(audio_stream.read())
-        except (BotoCoreError, ClientError) as e:
-            # 실패 시 빈 무음 파일 대체(0.6s)
-            _write_silence(out_path, 0.6)
+        except (BotoCoreError, ClientError, Exception):
+            _write_silence_mp3(out_path, 0.6)  # 실패 시 0.6s 무음
         paths.append(out_path)
     return paths
 
-def _write_silence(out_path: str, duration_sec: float = 0.6):
-    # moviepy로 짧은 무음 생성 대신, 빈 파일을 만들고 후속 로직에서 길이 보정하는 방어
-    open(out_path, "wb").close()
+def _write_silence_mp3(out_path: str, duration_sec: float = 0.6):
+    """
+    ffmpeg로 무음 mp3 생성 (moviepy 없이).
+    """
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "lavfi", "-i", f"anullsrc=r=24000:cl=mono",
+        "-t", str(max(0.05, float(duration_sec))),
+        "-c:a", "libmp3lame", "-b:a", "128k",
+        out_path,
+    ]
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        # ffmpeg 실패 시라도 빈 파일 생성 (후속 단계에서 길이 폴백)
+        open(out_path, "wb").close()
 
 def mix_polly(chunk_paths: List[str], out_path: str) -> str:
     """
-    라인별 오디오를 순서대로 이어붙여 하나의 파일로 만든다.
+    ffmpeg concat demuxer로 MP3들을 무손실로 이어붙임.
+    (모두 동일 코덱/샘플레이트인 Polly 출력이라 -c copy 가능)
     """
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-    clips = []
-    for p in chunk_paths:
+    # concat용 임시 리스트 파일 작성
+    list_path = out_path + ".txt"
+    with open(list_path, "w", encoding="utf-8") as f:
+        for p in chunk_paths:
+            if not p:
+                continue
+            # 경로에 ' 가 있어도 안전하게 처리
+            f.write(f"file '{os.path.abspath(p).replace(\"'\", \"'\\\\''\")}'\n")
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "concat", "-safe", "0",
+        "-i", list_path,
+        "-c", "copy",
+        out_path,
+    ]
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        # copy 실패 시 재인코딩으로 폴백
+        cmd2 = [
+            "ffmpeg", "-y",
+            "-f", "concat", "-safe", "0",
+            "-i", list_path,
+            "-c:a", "libmp3lame", "-b:a", "192k",
+            out_path,
+        ]
+        subprocess.run(cmd2, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    finally:
         try:
-            clips.append(AudioFileClip(p))
+            os.remove(list_path)
         except Exception:
-            # 읽을 수 없으면 0.2s짜리 더미(사일런스 대체는 건너뜀)
             pass
-    if clips:
-        final = concatenate_audioclips(clips)
-        final.write_audiofile(out_path, codec="libmp3lame", verbose=False, logger=None)
-        for c in clips:
-            c.close()
-    else:
-        open(out_path, "wb").close()
     return out_path
