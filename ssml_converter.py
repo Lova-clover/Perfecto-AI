@@ -7,11 +7,6 @@ try:
 except Exception:
     complete_text = None
 
-try:
-    from deep_translator import GoogleTranslator
-except Exception:
-    GoogleTranslator = None
-
 # ssml_converter.py
 import json
 from typing import List
@@ -87,27 +82,6 @@ def convert_lines_to_ssml_batch(lines: List[str]) -> List[str]:
 
     return ssml_list
 
-def _looks_english(text: str) -> bool:
-    if not text: return False
-    en = len(re.findall(r"[A-Za-z]", text))
-    ko = len(re.findall(r"[\uac00-\ud7a3]", text))
-    return en >= 3 and en > ko * 1.2
-
-def koreanize_if_english(text: str) -> str:
-    """문장이 사실상 영어면, 의미 동일 한국어 한 문장으로 변환."""
-    t = (text or "").strip()
-    if not t or not _looks_english(t):
-        return t
-        
-    # LLM 호출 없이 Google 번역만 사용하여 한국어로 변환
-    if GoogleTranslator is not None:
-        try:
-            return GoogleTranslator(source="auto", target="ko").translate(t)
-        except Exception:
-            pass
-
-    # 번역 실패 시 원문 유지
-    return t
     
 def _heuristic_breath_lines(text: str, strict: bool = True) -> list[str]:
     t = (text or "").strip()
