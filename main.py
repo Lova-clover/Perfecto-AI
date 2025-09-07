@@ -190,13 +190,13 @@ if make_btn:
     st.write("🗣️ TTS/세그먼트/ASS 생성 중...")
     try:
         segments, audio_clips, ass_path = generate_subtitle_from_script(
-            final_script,
-            ass_path,
+            script_text=final_script,             # 내용은 무시되지만 관례상 남김
+            ass_path=ass_path,
             provider="polly",
-            template="default",              # 호환용 인자
+            template="default",
             polly_voice_key=polly_voice_key,
             strip_trailing_punct_last=True,
-            pre_split_lines=clause_lines,    # 전달하면 내부에서 절 LLM 재호출 없음
+            pre_split_lines=clause_lines,         # ✅ 방금 만든 B를 그대로 사용
         )
     except Exception as e:
         st.error(f"세그먼트 생성 실패: {e}")
