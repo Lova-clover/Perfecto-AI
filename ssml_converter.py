@@ -105,7 +105,7 @@ SSML_PROMPT =  """역할: 너는 한국어 대본을 숏폼용 Amazon Polly SSML
 def breath_linebreaks_batch(text: str) -> List[str]:
     """전체 대본을 LLM 한 번 호출하여 '절/호흡' 단위 리스트로 분절."""
     prompt = BREATH_LINEBREAK_PROMPT.format(script=text)
-    raw = _complete_with_any_llm(prompt, temperature=0.4)
+    raw = _complete_with_any_llm(prompt, temperature=1)
     try:
         arr = json.loads(raw)
         lines = [ (x or "").strip() for x in arr if isinstance(x, str) and x.strip() ]
@@ -121,7 +121,7 @@ def convert_lines_to_ssml_batch(lines: List[str]) -> List[str]:
         return []
     payload = {"lines": lines}
     prompt = SSML_PROMPT.format(lines_json=json.dumps(payload, ensure_ascii=False, indent=2))
-    raw = _complete_with_any_llm(prompt, temperature=0.7)
+    raw = _complete_with_any_llm(prompt, temperature=1)
     try:
         arr = json.loads(raw)
         out = []
