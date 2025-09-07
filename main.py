@@ -1184,11 +1184,13 @@ with st.sidebar:
                         audio_path = os.path.join(audio_output_dir, "generated_audio.mp3")
 
                         st.write("🗣️ 라인별 TTS 생성/병합 및 세그먼트 산출 중...")
-                        provider = "elevenlabs" if st.session_state.selected_tts_provider == "ElevenLabs" else "polly"
-                        tmpl = st.session_state.selected_tts_template if provider == "elevenlabs" else st.session_state.selected_polly_voice_key
-                        
-                        script_text = koreanize_if_english(final_script_for_video)
-                        script_text_for_tts = "\n".join(sentence_lines)
+                        tts_provider = "elevenlabs" if st.session_state.selected_tts_provider == "ElevenLabs" else "polly"
+                        voice_template = (
+                            st.session_state.selected_tts_template
+                            if tts_provider == "elevenlabs"
+                            else st.session_state.selected_polly_voice_key
+                        )
+                        polly_voice_key = st.session_state.selected_polly_voice_key
                         
                         # ✅ 토큰 없이 로그 만들 수 있도록 세션에 저장
                         st.session_state["_orig_lines_for_tts"] = clause_lines[:]
