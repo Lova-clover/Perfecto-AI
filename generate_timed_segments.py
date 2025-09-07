@@ -180,7 +180,7 @@ def generate_subtitle_from_script(
     """
     # 1) 절(B)
     if pre_split_lines:
-        clause_lines = [s.strip() for s in pre_split_lines if str(s).strip()]
+        clause_lines = [str(s).strip() for s in pre_split_lines if str(s).strip()]
     else:
         clause_lines = breath_linebreaks_batch(script_text)
 
