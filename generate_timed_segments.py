@@ -223,10 +223,12 @@ def generate_subtitle_from_script(
     final_mix = os.path.join("assets", "auto", "_mix_audio.mp3")
     os.makedirs(os.path.dirname(final_mix) or ".", exist_ok=True)
     mix_polly(chunk_paths, final_mix)
-    _ensure_alignment(segments, final_mix, tol=0.03)
+   
 
     # 4) 세그먼트 타이밍
     segments: List[Dict] = []
+     _ensure_alignment(segments, final_mix, tol=0.03)
+
     cur = 0.0
     for p, text, ssml in zip(chunk_paths, clause_lines, ssml_lines):
         dur = _probe_duration(wav)
