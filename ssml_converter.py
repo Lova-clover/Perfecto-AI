@@ -1,103 +1,28 @@
-from RAG.chain_builder import get_default_chain
-import re
-from html import escape as _xml_escape
-
-try:
-    from llm_utils import complete_text  # 존재하면 활용
-except Exception:
-    complete_text = None
-
 # ssml_converter.py
 import json
 from typing import List
-
-# ⬇️ 신규: 전체 대본 → 분절 라인 배열(JSON) 1회
-def breath_linebreaks_batch(script_text: str) -> List[str]:
-    """
-    전체 대본 1개를 입력하고, LLM에서 분절된 라인 배열을 JSON으로 1회 반환.
-    - BREATH_PROMPT(기존 프롬프트 본문)는 그대로 사용하고,
-      '입/출력은 JSON 배열'만 강제한다.
-    """
-    text = (script_text or "").strip()
-    if not text:
-        return []
-
-    prompt = f"""
-{BREATH_PROMPT}
-
-[입력/출력 형식(중요)]
-- 입력은 전체 대본 1개(개행 포함 가능).
-- 출력은 JSON 배열 lines: ["라인1","라인2",...]
-- 마크다운/설명/주석 금지. 오직 JSON만.
-- 빈 문자열 요소 금지.
-
-입력:
-<<<SCRIPT
-{text}
-SCRIPT>>>
-"""
-    raw = _complete_with_any_llm(prompt)
-    try:
-        lines = json.loads(raw)
-    except Exception:
-        # 혹시 모델이 JSON이 아닌 텍스트를 내보내면 줄 단위로 보정
-        lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
-    # 최종 정리
-    lines = [ln.strip() for ln in lines if isinstance(ln, str) and ln.strip()]
-    return lines
-
-# ⬇️ 신규: 분절 라인 배열 → SSML 배열(JSON) 1회
-def convert_lines_to_ssml_batch(lines: List[str]) -> List[str]:
-    """
-    라인 배열을 통째로 입력하고, 동일 길이의 SSML 배열(JSON)을 1회 반환.
-    - SSML_PROMPT(기존 프롬프트 본문)는 그대로 사용.
-    - 배열 길이/순서 동일성 강제.
-    """
-    if not lines:
-        return []
-
-    prompt = f"""
-{SSML_PROMPT}
-
-[입력/출력 형식(중요)]
-- 입력은 JSON 배열 lines: ["라인1","라인2",...]
-- 출력은 JSON 배열 ssml_list: ["<speak>..</speak>", ...]
-- 배열 길이와 순서는 반드시 동일.
-- 마크다운/설명/주석 금지. 오직 JSON만.
-
-입력(JSON):
-{json.dumps({"lines": lines}, ensure_ascii=False)}
-"""
-    raw = _complete_with_any_llm(prompt)
-    try:
-        ssml_list = json.loads(raw)
-    except Exception:
-        # 비정형 출력 대비: 줄 나눠서 받기(권장X)
-        ssml_list = [x.strip() for x in raw.split("\n") if x.strip()]
-
-    if not isinstance(ssml_list, list):
-        raise ValueError("SSML 배치 결과가 JSON 배열이 아닙니다.")
-    if len(ssml_list) != len(lines):
-        raise AssertionError(f"SSML 배열 길이 불일치: {len(ssml_list)} != {len(lines)}")
-
-    return ssml_list
-
-    
-def _heuristic_breath_lines(text: str, strict: bool = True) -> list[str]:
-    t = (text or "").strip()
-    if not t:
-        return []
-    if strict:
-        # ✨ LLM 실패 시엔 '추가 분절/병합' 절대 하지 않고 원문 라인 그대로 사용
-        return [t]
-
 import streamlit as st
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_openai import ChatOpenAI
 
-# 전역 캐시
-_BREATH_CACHE: dict[str, list[str]] = {}
+# ===== 공통 LLM 호출 유틸 =====
+def _complete_with_any_llm(prompt: str, temperature: float = 0.7, model: str = "gpt-5-mini") -> str:
+    llm = ChatOpenAI(
+        api_key=st.secrets["OPENAI_API_KEY"],
+        model=model,
+        temperature=temperature,
+    )
+    output_parser = StrOutputParser()
+    chain = ChatPromptTemplate.from_messages([
+        ("system", "너는 한국어 숏폼 스크립트의 편집을 돕는 보조 AI다."),
+        ("human", "{question}")
+    ]) | llm | output_parser
 
+    return chain.invoke({"question": prompt}).strip()
 
-BREATH_PROMPT = """역할: 너는 한국어 대본의 호흡(브레스) 라인브레이크 편집기다.
+# ===== 2차 분절(절/호흡) 배치 프롬프트 =====
+BREATH_LINEBREAK_PROMPT = """역할: 너는 한국어 대본의 호흡(브레스) 라인브레이크 편집기다.
 출력은 텍스트만, 줄바꿈으로만 호흡을 표현한다. 다른 기호·주석·설명·마크다운·태그를 절대 쓰지 않는다.
 
 [불변 규칙]
@@ -130,7 +55,9 @@ BREATH_PROMPT = """역할: 너는 한국어 대본의 호흡(브레스) 라인�
 명사구/조사 단위: 명사구 내부나 조사 바로 앞·뒤에서 어색하게 끊지 않는다.
 """
 
-SSML_PROMPT = """역할: 너는 한국어 대본을 숏폼용 Amazon Polly SSML로 변환하는 변환기다.
+# ===== SSML 변환 배치 프롬프트 =====
+# * 여기에서만 "비한국어 → 자연스러운 한국어" 교정을 허용
+SSML_PROMPT =  """역할: 너는 한국어 대본을 숏폼용 Amazon Polly SSML로 변환하는 변환기다.
 출력은 SSML만, <speak>…</speak> 구조로만 낸다. 마크다운/주석/설명 금지.
 
 [불변 규칙 — 반드시 지켜]
@@ -175,25 +102,42 @@ SSML_PROMPT = """역할: 너는 한국어 대본을 숏폼용 Amazon Polly SSML�
 - 물음표/쉼표 외의 마침표/느낌표/줄임표를 쓰지 않았는가?
 """
 
-def _complete_with_any_llm(prompt: str) -> str | None:
-    if complete_text is not None:
-        try:
-            return complete_text(prompt)
-        except Exception:
-            pass
+def breath_linebreaks_batch(text: str) -> List[str]:
+    """전체 대본을 LLM 한 번 호출하여 '절/호흡' 단위 리스트로 분절."""
+    prompt = BREATH_LINEBREAK_PROMPT.format(script=text)
+    raw = _complete_with_any_llm(prompt, temperature=0.4)
     try:
-        # system_prompt를 명시적으로 줌
-        chain = get_default_chain("너는 한국어 대본의 호흡(브레스) 라인브레이크 편집기다.")
-        out = chain.invoke({"question": prompt})
-        if isinstance(out, str):
-            return out
-        if isinstance(out, dict):
-            texts = [str(v) for v in out.values() if isinstance(v, (str, bytes))]
-            return max(texts, key=len) if texts else None
-    except Exception as e:
-        st.error(f"⚠️ LLM 호출 실패: {e}")
-    return None
+        arr = json.loads(raw)
+        lines = [ (x or "").strip() for x in arr if isinstance(x, str) and x.strip() ]
+        return lines
+    except Exception:
+        # JSON 실패 시 줄단위 폴백
+        lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+        return lines
 
-def _unwrap_speak(ssml: str) -> str:
-    m = re.search(r"<speak[^>]*>(.*)</speak>", ssml or "", flags=re.S|re.I)
-    return (m.group(1) if m else (ssml or "")).strip()
+def convert_lines_to_ssml_batch(lines: List[str]) -> List[str]:
+    """절 리스트(B)를 LLM 한 번 호출하여 SSML 라인 배열(C)로 변환."""
+    if not lines:
+        return []
+    payload = {"lines": lines}
+    prompt = SSML_PROMPT.format(lines_json=json.dumps(payload, ensure_ascii=False, indent=2))
+    raw = _complete_with_any_llm(prompt, temperature=0.7)
+    try:
+        arr = json.loads(raw)
+        out = []
+        for i, it in enumerate(arr):
+            s = (it or "").strip() if isinstance(it, str) else ""
+            # <speak>로 감싸져 있지 않으면 보정
+            if s and "<speak" not in s.lower():
+                s = f"<speak>{s}</speak>"
+            out.append(s)
+        if len(out) != len(lines):
+            # 길이 불일치 시 보수적으로 맞춰줌
+            out = (out + ["<speak></speak>"] * len(lines))[:len(lines)]
+        return out
+    except Exception:
+        # JSON 실패 시 라인 분해 폴백
+        arr = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+        if len(arr) != len(lines):
+            arr = (arr + ["<speak></speak>"] * len(lines))[:len(lines)]
+        return arr
