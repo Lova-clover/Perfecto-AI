@@ -166,13 +166,12 @@ def generate_ass_subtitle(
 def generate_subtitle_from_script(
     script_text: str,
     ass_path: str,
-    # 아래 인자들은 호환을 위해 유지하지만 Polly만 사용합니다.
     provider: str = "polly",
     template: str = "default",
     polly_voice_key: str = "korean_female1",
     strip_trailing_punct_last: bool = True,
-    pre_split_lines: Optional[List[str]] = None,
-) -> Tuple[List[Dict], List[str], str]:
+    pre_split_lines: Optional[List[str]] = None,  # ✅ 추가
+):
     """
     Returns:
         segments: [{"start":..,"end":..,"text":..,"ssml":..,"pitch":..}, ...]
