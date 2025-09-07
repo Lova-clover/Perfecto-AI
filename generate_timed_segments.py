@@ -1005,7 +1005,7 @@ def split_script_to_lines(script_text: str, mode="llm") -> list[str]:
     if not text:
         return []
 
-    # ✨ 개행이 있으면 우선 하드 경계로 쪼갬
+    #  개행 기준 강제 분할
     if "\n" in text:
         base_lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     else:
@@ -1014,11 +1014,11 @@ def split_script_to_lines(script_text: str, mode="llm") -> list[str]:
     if mode == "newline":
         return base_lines
 
-    # mode == "llm": 각 줄을 breath_linebreaks에 넣되, honor_newlines=True로 추가 분절 방지
-    out = []
-    for line in base_lines:
-        out.extend(breath_linebreaks(line, honor_newlines=True))
-    return out
+    # mode == "llm": 전체 대본을 한 번에 LLM에 전달해 분절 라인 배열 반환
+    
+    joined = "\n".join(base_lines)
+    lines = breath_linebreaks_batch(joined)
+    return [ln.strip() for ln in lines if ln.strip()]
 
 # --- 변경 2: generate_subtitle_from_script 시그니처/로직 확장 ---
 def generate_subtitle_from_script(
