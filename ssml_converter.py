@@ -7,7 +7,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 
 # ===== 공통 LLM 호출 유틸 =====
-def _complete_with_any_llm(prompt: str, temperature: float = 0.7, model: str = "gpt-5-mini") -> str:
+def _complete_with_any_llm(prompt: str, temperature: float = 1, model: str = "gpt-5-mini") -> str:
     llm = ChatOpenAI(
         api_key=st.secrets["OPENAI_API_KEY"],
         model=model,
