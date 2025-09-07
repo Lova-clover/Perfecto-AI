@@ -98,31 +98,15 @@ def koreanize_if_english(text: str) -> str:
     t = (text or "").strip()
     if not t or not _looks_english(t):
         return t
-
-    # 1) LLM 시도 (의미 동일 한국어 한 문장)
-    prompt = (
-        "역할: 너는 한국어 문장 변환기다.\n"
-        "출력은 한국어 **한 문장**만. 마크다운/주석/설명 금지.\n"
-        "규칙: 의미를 100% 유지. 숫자/단위/고유명사는 보존. 문장 끝 어미는 평서체.\n\n"
-        "[입력]\n" + t + "\n\n[출력]\n"
-    )
-    try:
-        out = _complete_with_any_llm(prompt)
-        if out and out.strip():
-            # 안전 정리
-            s = re.sub(r"\s+", " ", out).strip()
-            return s
-    except Exception:
-        pass
-
-    # 2) 폴백: Google 번역
+        
+    # LLM 호출 없이 Google 번역만 사용하여 한국어로 변환
     if GoogleTranslator is not None:
         try:
             return GoogleTranslator(source="auto", target="ko").translate(t)
         except Exception:
             pass
 
-    # 3) 실패 시 원문 유지
+    # 번역 실패 시 원문 유지
     return t
     
 def _heuristic_breath_lines(text: str, strict: bool = True) -> list[str]:
