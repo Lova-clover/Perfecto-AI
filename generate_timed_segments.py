@@ -5,7 +5,7 @@ import re
 import math
 from typing import List, Dict, Tuple, Optional
 
-from moviepy.editor import AudioFileClip
+import subprocess
 
 # LLM 호출은 ssml_converter에만 존재
 from ssml_converter import breath_linebreaks_batch, convert_lines_to_ssml_batch
@@ -43,6 +43,31 @@ def dedupe_adjacent_texts(lines: List[str]) -> List[str]:
 
 def _auto_split_for_tempo(lines: List[str], max_chars: int = 9999) -> List[str]:
     return list(lines or [])
+
+def _probe_duration(path: str) -> float:
+    """ffprobe로 오디오 길이(초) 읽기"""
+    try:
+        out = subprocess.check_output([
+            "ffprobe","-v","error",
+            "-show_entries","format=duration",
+            "-of","default=noprint_wrappers=1:nokey=1",
+            path
+        ], stderr=subprocess.STDOUT).decode("utf-8","ignore").strip()
+        return float(out)
+    except Exception:
+        return 0.0
+
+def _ensure_alignment(segments: list, final_audio_path: str, tol: float = 0.03) -> None:
+    """최종 오디오 길이와 마지막 세그먼트 end가 tol(초) 이상 어긋나면 보정"""
+    if not segments:
+        return
+    total = _probe_duration(final_audio_path)
+    if total <= 0:
+        return
+    drift = total - segments[-1]["end"]
+    if abs(drift) >= tol:
+        segments[-1]["end"] = round(max(segments[-1]["start"] + 0.02,
+                                        segments[-1]["end"] + drift), 3)
 
 # -------- ASS 유틸 --------
 def _drop_special_except_q(s: str) -> str:
@@ -198,16 +223,16 @@ def generate_subtitle_from_script(
     final_mix = os.path.join("assets", "auto", "_mix_audio.mp3")
     os.makedirs(os.path.dirname(final_mix) or ".", exist_ok=True)
     mix_polly(chunk_paths, final_mix)
+    _ensure_alignment(segments, final_mix, tol=0.03)
 
     # 4) 세그먼트 타이밍
     segments: List[Dict] = []
     cur = 0.0
     for p, text, ssml in zip(chunk_paths, clause_lines, ssml_lines):
-        try:
-            with AudioFileClip(p) as a:
-                dur = float(a.duration or 0.0)
-        except Exception:
+        dur = _probe_duration(wav)
+        if dur <= 0.0:
             dur = max(0.6, min(8.0, len(text) / 7.0))
+
         start, end = cur, cur + dur
         pitch_st = _extract_pitch_value(ssml)
         segments.append(
