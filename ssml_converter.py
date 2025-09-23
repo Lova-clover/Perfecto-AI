@@ -78,6 +78,12 @@ def breath_linebreaks(text: str, honor_newlines: bool = True, *, log: bool=False
     # LLM 호출
     prompt = BREATH_PROMPT.replace("{{TEXT}}", t)
     out = _complete_with_any_llm(prompt) or ""
+    
+    # 🔎 디버그 로그 추가
+    print("\n[breath_linebreaks] LLM raw output ↓↓↓")
+    print(out if out else "(빈 응답)")
+    print("↑↑↑ [breath_linebreaks] LLM raw output 끝\n")
+
     out = out.strip()
 
     if log:
@@ -86,6 +92,7 @@ def breath_linebreaks(text: str, honor_newlines: bool = True, *, log: bool=False
         st.code(out if out else "(빈 응답)", language="text")
 
     if out:
+
         lines = [ln for ln in out.splitlines() if ln.strip()]
         _BREATH_CACHE[t] = lines
         return lines
