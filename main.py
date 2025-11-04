@@ -1,5 +1,11 @@
 import streamlit as st
 import time 
+import logging  # <-- 1. logging 임포트
+# --- 2. 로깅 기본 설정 (INFO 레벨 이상을 터미널에 출력) ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, AIMessage
 from RAG.rag_pipeline import get_retriever_from_source
