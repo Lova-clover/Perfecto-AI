@@ -1402,7 +1402,7 @@ with st.sidebar:
                             st.write("🔤 (1/4) 텍스트 기반 세그먼트 생성 완료")
                             
                     # --- 미디어(이미지 or 영상) 수집 ---
-                    st.write(f"🖼️ (2/4) {"영상" if is_video_template else "이미지"} 수집 중...")
+                    st.write(f"🖼️ (2/4) {'영상' if is_video_template else '이미지'} 수집 중...")
                     media_start_time = time.time() # <-- 미디어 수집 시작
                     image_paths, video_paths = [], []
                     if st.session_state.video_style != "감성 텍스트 영상":
