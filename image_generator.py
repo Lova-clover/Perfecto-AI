@@ -1,4 +1,5 @@
 # image_generator.py — Pexels API rate-limit safe version
+import logging # <-- 추가
 import os, time, random, subprocess, shlex, requests
 from dotenv import load_dotenv
 from requests.adapters import HTTPAdapter
@@ -142,7 +143,16 @@ def _pexels_get_json(sess: requests.Session, url: str, params: Dict[str, Any]) -
 
     while True:
         _sleep_for_throttle()
+        # <<<--- [API 호출 로깅: 시작] ---
+        logging.info(f"[PEXELS API CALL] URL: {url}, Query: {params.get('query')}, Page: {params.get('page')}")
+        api_start_time = time.time()
+        # --- [API 호출 로깅: 끝] --->>>
         r = sess.get(url, params=params, timeout=(5, 20))
+        # <<<--- [API 응답 로깅: 시작] ---
+        api_end_time = time.time()
+        logging.info(f"[PEXELS API RESP] Status: {r.status_code}, Elapsed: {api_end_time - api_start_time:.2f}s")
+        # --- [API 응답 로깅: 끝] --->>>
+        
         if r.status_code == 429:
             wait_s = _headers_wait_seconds(r.headers)
             print(f"⏳ 429 Too Many Requests. {wait_s}s 대기 후 재시도.")

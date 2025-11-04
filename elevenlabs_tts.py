@@ -5,6 +5,7 @@ import boto3, io # Import the boto3 library for AWS services
 import re
 from html import escape
 from botocore.exceptions import BotoCoreError, ClientError
+import logging
 
 # Load API keys from Streamlit secrets
 ELEVEN_API_KEY = st.secrets["ELEVEN_API_KEY"]
@@ -194,17 +195,29 @@ def generate_polly_tts(text, save_path, polly_voice_name_key, *, speed=1.0, volu
     while True:
         try:
             attempt += 1
+            # <<<--- [API 호출 로깅: 시작] ---
+            logging.info(f"[POLLY API CALL] Attempt: {attempt}, VoiceID: {voice_id}, Engine: {engine}, Chars: {len(payload)}")
+            api_start_time = time.time()
+            # --- [API 호출 로깅: 끝] --->>>
             polly = boto3.client("polly", region_name="ap-northeast-2")
             resp = polly.synthesize_speech(
                 Text=payload, TextType="ssml", OutputFormat="mp3",
                 VoiceId=voice_id, Engine=engine
             )
+            # <<<--- [API 응답 로깅: 시작] ---
+            api_end_time = time.time()
+            logging.info(f"[POLLY API RESP] Success (Attempt {attempt}), Elapsed: {api_end_time - api_start_time:.2f}s")
+            # --- [API 응답 로깅: 끝] --->>>
             with open(save_path, "wb") as f:
                 f.write(resp["AudioStream"].read())
             print(f"✅ Polly 합성 성공: {save_path} (시도 {attempt}회차)")
             return save_path
 
         except (BotoCoreError, ClientError) as e:
+            # <<<--- [API 에러 로깅: 시작] ---
+            api_end_time = time.time() # 실패 시점의 시간
+            logging.warning(f"⚠️ Polly 합성 실패 (시도 {attempt}, {api_end_time - api_start_time:.2f}s): {e}")
+            # --- [API 에러 로깅: 끝] --->>>
             msg = f"⚠️ Polly 합성 실패 (시도 {attempt}): {e}"
             try:
                 st.warning(msg)
