@@ -1,4 +1,5 @@
 import streamlit as st
+import time 
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, AIMessage
 from RAG.rag_pipeline import get_retriever_from_source
@@ -1181,6 +1182,7 @@ with st.sidebar:
 
             with st.spinner("✨ 영상 제작 중입니다..."):
                 try:
+                    overall_start_time = time.time()
                     media_query_final = ""
                     audio_path = None
                     segments = []
@@ -1188,6 +1190,8 @@ with st.sidebar:
 
                     # --- 음성 포함/미포함 분기 ---
                     if not is_emotional and st.session_state.include_voice:
+                        st.write("🗣️ (1/4) 라인별 TTS 생성/병합 및 세그먼트 산출 중...")
+                        tts_start_time = time.time() # <-- TTS 시작
                         # (중요) 이중 음성 방지: 별도의 단발 TTS 생성 없이
                         # generate_subtitle_from_script 한 번으로 라인별 TTS→병합까지 수행.
                         audio_output_dir = "assets"
@@ -1346,6 +1350,8 @@ with st.sidebar:
                             patch_ass_center(ass_path)
                         st.success(f"음성/자막 생성 완료: {audio_path}, {ass_path}")
                         st.session_state.audio_path = audio_path
+                        tts_end_time = time.time() # <-- TTS 종료
+                        st.write(f"✅ (1/4) TTS 및 자막 생성 완료 ({tts_end_time - tts_start_time:.2f}초)")
 
                     else:
                         # 음성 없이 세그먼트 생성(텍스트 길이 기반)
@@ -1393,8 +1399,11 @@ with st.sidebar:
                             segments_for_video = enforce_min_duration_non_merging(segments_for_video, min_dur=0.50, margin=0.02)
                             segments_for_video = quantize_events(segments_for_video, fps=30.0)
                             segments_for_video = ensure_min_frames(segments_for_video, fps=30.0, min_frames=2)
-
+                            st.write("🔤 (1/4) 텍스트 기반 세그먼트 생성 완료")
+                            
                     # --- 미디어(이미지 or 영상) 수집 ---
+                    st.write(f"🖼️ (2/4) {"영상" if is_video_template else "이미지"} 수집 중...")
+                    media_start_time = time.time() # <-- 미디어 수집 시작
                     image_paths, video_paths = [], []
                     if st.session_state.video_style != "감성 텍스트 영상":
                         if is_video_template:
@@ -1539,8 +1548,12 @@ with st.sidebar:
 
                             image_paths = build_image_paths_for_dense_segments(segments_for_video, persona_text)
 
+                    media_end_time = time.time() # <-- 미디어 수집 종료
+                    st.write(f"✅ (2/4) 미디어 수집 완료 ({media_end_time - media_start_time:.2f}초)")
 
                     # --- 합성 ---
+                    st.write("🎬 (3/4) 비디오 합성 중 (MoviePy)...")
+                    synth_start_time = time.time() # <-- 합성 시작
                     DEFAULT_BGM = "assets/[BGM] 힙합 비트 신나는 음악  무료브금  HYP-Show Me - HYP MUSIC - BGM Design.mp3"
                     bgm_path = st.session_state.bgm_path
                     if not (bgm_path and os.path.exists(bgm_path)):
@@ -1597,16 +1610,26 @@ with st.sidebar:
                                 bgm_path=bgm_path,
                                 save_path=temp_video_path
                             )
+                    synth_end_time = time.time() # <-- 합성 종료
+                    st.write(f"✅ (3/4) 비디오 합성 완료 ({synth_end_time - synth_start_time:.2f}초)")
+                    
+                    # --- 4. 자막 오버레이 ---
+                    if not is_emotional and ass_path: # 감성 영상이 아닐 때만
+                        st.write("📝 (4/4) 자막 입히는 중 (FFmpeg)...")
+                        sub_start_time = time.time() # <-- 자막 시작
 
-                        # 자막 오버레이
-                        st.write("📝 자막 입히는 중...")
                         final_video_with_subs_path = add_subtitles_to_video(
                             input_video_path=created_video_path,
                             ass_path=ass_path,
                             output_path=final_video_path
                         )
+                        sub_end_time = time.time() # <-- 자막 종료
+                        st.write(f"✅ (4/4) 자막 적용 완료 ({sub_end_time - sub_start_time:.2f}초)")
+                    else:
+                        final_video_with_subs_path = created_video_path # 자막 단계 건너뜀
 
-                    st.success(f"✅ 최종 영상 생성 완료: {final_video_with_subs_path}")
+                    overall_end_time = time.time() # <-- 전체 종료
+                    st.success(f"🎉 최종 영상 생성 완료: {final_video_with_subs_path} (총 {overall_end_time - overall_start_time:.2f}초)")
                     st.session_state["final_video_path"] = final_video_with_subs_path
 
                 except Exception as e:
