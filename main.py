@@ -1438,55 +1438,68 @@ with st.sidebar:
                             # 4) 문장별로 영상 1개씩 검색 (병렬화)
                             video_paths = []
 
-                            # Lock to protect session_state updates across threads
+                            # Copy needed session_state into local structures to avoid
+                            # accessing Streamlit session state from worker threads.
+                            local_seen_video_ids = set(st.session_state.get("seen_video_ids", set()))
+                            local_query_page_cursor = dict(st.session_state.get("query_page_cursor", {}))
+
+                            # Lock to protect local structures across threads
                             search_lock = threading.Lock()
 
-                            def _try_search_once(q: str, clip_idx: int):
-                                # 키워드별 다음 페이지 커서 (기본 1) - 읽기/쓰기 시 락 사용
-                                with search_lock:
-                                    pg = st.session_state.query_page_cursor.get(q, 1)
-                                paths, ids = generate_videos_for_topic(
-                                    query=q,
-                                    num_videos=1,
-                                    start_index=clip_idx,           # 파일명 일관성 유지
-                                    orientation="portrait",
-                                    page=pg,                        # ✅ 이 키워드는 여기서부터
-                                    exclude_ids=st.session_state.seen_video_ids,  # ✅ 이미 쓴 건 건너뛰기
-                                    return_ids=True
-                                )
+                            def _try_search_once_local(q: str, clip_idx: int):
+                                # Use local cursor and seen ids to call the API
+                                pg = local_query_page_cursor.get(q, 1)
+                                try:
+                                    paths, ids = generate_videos_for_topic(
+                                        query=q,
+                                        num_videos=1,
+                                        start_index=clip_idx,
+                                        orientation="portrait",
+                                        page=pg,
+                                        exclude_ids=local_seen_video_ids,
+                                        return_ids=True
+                                    )
+                                except Exception:
+                                    # Fallback: try without return_ids
+                                    try:
+                                        paths = generate_videos_for_topic(q, 1, start_index=clip_idx, orientation="portrait", page=pg)
+                                        ids = []
+                                    except Exception as e:
+                                        raise
+
                                 if paths:
-                                    # 성공 → 다음에 같은 키워드 쓰면 다음 페이지부터
+                                    # Update local cursor and seen ids under lock
                                     with search_lock:
-                                        st.session_state.query_page_cursor[q] = pg + 1
+                                        local_query_page_cursor[q] = pg + 1
                                         try:
-                                            st.session_state.seen_video_ids.update(ids)
+                                            local_seen_video_ids.update(ids)
                                         except Exception:
-                                            # session_state may not be set in some contexts
                                             pass
                                 return paths
 
                             def _worker_search(q: str, clip_idx: int):
-                                # Try original query
-                                st.write(f"🎞️ 문장 {clip_idx} 검색(요청 큐잉): {q}")
-                                got = _try_search_once(q, clip_idx)
+                                # Worker must NOT call Streamlit UI or access st.session_state
+                                got = _try_search_once_local(q, clip_idx)
                                 if got:
                                     return got
-                                # Try comma pieces
                                 if "," in q:
                                     for piece in [p.strip() for p in q.split(",") if p.strip()]:
-                                        got = _try_search_once(piece, clip_idx)
+                                        got = _try_search_once_local(piece, clip_idx)
                                         if got:
                                             return got
-                                # Try normalized query
                                 fb = _normalize_scene_query(q)
                                 if fb and fb != q:
-                                    got = _try_search_once(fb, clip_idx)
+                                    got = _try_search_once_local(fb, clip_idx)
                                     if got:
                                         return got
                                 return None
 
                             max_workers = min(8, max(1, len(per_sentence_queries)))
                             futures = []
+                            # Announce searches from main thread to avoid UI calls in workers
+                            for clip_idx, q in enumerate(per_sentence_queries, start=1):
+                                st.write(f"🎞️ 문장 {clip_idx} 검색(요청 큐잉): {q}")
+
                             with ThreadPoolExecutor(max_workers=max_workers) as ex:
                                 for clip_idx, q in enumerate(per_sentence_queries, start=1):
                                     futures.append(ex.submit(_worker_search, q, clip_idx))
@@ -1498,6 +1511,14 @@ with st.sidebar:
                                             video_paths.extend(got)
                                     except Exception as e:
                                         print(f"영상 검색/다운로드 에러(병렬): {e}")
+
+                            # Write back local cursor and seen ids into Streamlit session state
+                            try:
+                                st.session_state.query_page_cursor = local_query_page_cursor
+                                st.session_state.seen_video_ids = local_seen_video_ids
+                            except Exception:
+                                # If writing back to session_state fails in this context, ignore
+                                pass
 
                             # 5) 길이 보정
                             # 🔁 중복 제거(경로/내용 기반)
@@ -1540,7 +1561,7 @@ with st.sidebar:
 
                                         found_unique = False
                                         for cand in candidates:
-                                            got = _try_search_once(cand, len(video_paths) + added + 1)
+                                            got = _try_search_once_local(cand, len(video_paths) + added + 1)
                                             if not got:
                                                 continue
                                             pth = got[0]
