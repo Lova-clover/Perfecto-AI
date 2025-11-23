@@ -4,7 +4,7 @@ from html import escape as _xml_escape
 # generate_timed_segments.py
 import os
 import re, math
-from elevenlabs_tts import generate_tts
+from elevenlabs_tts import generate_tts, generate_polly_tts
 from pydub import AudioSegment
 import kss
 import boto3, json
@@ -586,18 +586,26 @@ def generate_tts_per_line(script_lines, provider, template, polly_voice_key="kor
         max_workers = int(os.getenv("POLLY_TTS_MAX_WORKERS", str(min(4, max(1, len(payloads))))))
         max_workers = min(max_workers, max(1, len(payloads)))
 
+        # Read Streamlit-based polly settings once (avoid accessing st inside worker threads)
+        try:
+            import streamlit as st
+            polly_speed = float(getattr(st.session_state, "polly_speed", 1.0))
+            polly_vol_db = int(getattr(st.session_state, "polly_volume_db", 0))
+        except Exception:
+            polly_speed = 1.0
+            polly_vol_db = 0
+
         results = {}
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             future_to_idx = {}
             for (i, ls, path, orig_line) in payloads:
                 fut = ex.submit(
-                    generate_tts,
+                    generate_polly_tts,
                     ls,
                     path,
-                    "polly",
-                    template,
-                    None,
-                    polly_voice_key
+                    polly_voice_key,
+                    speed=polly_speed,
+                    volume_db=polly_vol_db
                 )
                 future_to_idx[fut] = (i, orig_line, path)
 

@@ -6,6 +6,7 @@ import re
 from html import escape
 from botocore.exceptions import BotoCoreError, ClientError
 import logging
+import threading
 
 # Load API keys from Streamlit secrets
 ELEVEN_API_KEY = st.secrets["ELEVEN_API_KEY"]
@@ -219,8 +220,16 @@ def generate_polly_tts(text, save_path, polly_voice_name_key, *, speed=1.0, volu
             logging.warning(f"⚠️ Polly 합성 실패 (시도 {attempt}, {api_end_time - api_start_time:.2f}s): {e}")
             # --- [API 에러 로깅: 끝] --->>>
             msg = f"⚠️ Polly 합성 실패 (시도 {attempt}): {e}"
+            # Avoid calling Streamlit APIs from background threads (causes missing ScriptRunContext warnings).
             try:
-                st.warning(msg)
+                if threading.current_thread() is threading.main_thread():
+                    try:
+                        import streamlit as st
+                        st.warning(msg)
+                    except Exception:
+                        print(msg)
+                else:
+                    print(msg)
             except Exception:
                 print(msg)
 
