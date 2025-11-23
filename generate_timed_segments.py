@@ -611,7 +611,7 @@ def generate_tts_per_line(script_lines, provider, template, polly_voice_key="kor
                     print(f"오류: 라인 {i+1} ('{(orig_line or '')[:30]}...') TTS 생성 실패: {e}")
 
         # preserve order of successful ones
-        for i, _, path in sorted(payloads, key=lambda x: x[0]):
+        for i, _, path, _ in sorted(payloads, key=lambda x: x[0]):
             if i in results:
                 audio_paths.append(results[i])
 
