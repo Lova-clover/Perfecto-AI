@@ -566,30 +566,70 @@ def generate_tts_per_line(script_lines, provider, template, polly_voice_key="kor
     os.makedirs(temp_audio_dir, exist_ok=True)
 
     print(f"디버그: 총 {len(script_lines)}개의 스크립트 라인에 대해 TTS 생성 시도.")
-
+    # Prepare per-line payloads first (validate SSML / wrap speak for Polly)
+    payloads = []
     for i, line in enumerate(script_lines):
         line_audio_path = os.path.join(temp_audio_dir, f"line_{i}.mp3")
         try:
-            # Polly면 한 번 더 안전 체크(빈 prosody 제거 등)
             line_ssml = _validate_ssml(line)
-
-            # 완전체가 아니면 <speak> 래핑(혹시 상위 단계에서 못 감싼 경우 대비)
             ls = line_ssml.strip()
             if provider == "polly" and not ls.startswith("<speak"):
                 ls = f"<speak>{ls}</speak>"
+        except Exception:
+            ls = f"<speak>{_xml_escape(line or '')}</speak>"
+        payloads.append((i, ls, line_audio_path, line))
 
-            generate_tts(
-                text=ls,
-                save_path=line_audio_path,
-                provider=provider,
-                template_name=template,
-                polly_voice_name_key=polly_voice_key
-            )
-            audio_paths.append(line_audio_path)
-            print(f"디버그: 라인 {i+1} ('{line[:30]}...') TTS 생성 성공. 파일: {line_audio_path}")
-        except Exception as e:
-            print(f"오류: 라인 {i+1} ('{line[:30]}...') TTS 생성 실패: {e}")
-            continue
+    # If provider is Polly, parallelize using ThreadPoolExecutor (configurable workers)
+    prov = (provider or "").strip().lower()
+    if prov in ("polly", "amazon polly", "aws polly", "aws_polly"):
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        max_workers = int(os.getenv("POLLY_TTS_MAX_WORKERS", str(min(4, max(1, len(payloads))))))
+        max_workers = min(max_workers, max(1, len(payloads)))
+
+        results = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            future_to_idx = {}
+            for (i, ls, path, orig_line) in payloads:
+                fut = ex.submit(
+                    generate_tts,
+                    ls,
+                    path,
+                    "polly",
+                    template,
+                    None,
+                    polly_voice_key
+                )
+                future_to_idx[fut] = (i, orig_line, path)
+
+            for fut in as_completed(future_to_idx):
+                i, orig_line, path = future_to_idx[fut]
+                try:
+                    res = fut.result()
+                    results[i] = res
+                    print(f"디버그: 라인 {i+1} ('{(orig_line or '')[:30]}...') TTS 생성 성공. 파일: {res}")
+                except Exception as e:
+                    print(f"오류: 라인 {i+1} ('{(orig_line or '')[:30]}...') TTS 생성 실패: {e}")
+
+        # preserve order of successful ones
+        for i, _, path in sorted(payloads, key=lambda x: x[0]):
+            if i in results:
+                audio_paths.append(results[i])
+
+    else:
+        # Non-Polly providers (ElevenLabs etc.) keep sequential behavior
+        for i, ls, path, orig_line in payloads:
+            try:
+                generate_tts(
+                    text=ls,
+                    save_path=path,
+                    provider=provider,
+                    template_name=template,
+                    polly_voice_name_key=polly_voice_key
+                )
+                audio_paths.append(path)
+                print(f"디버그: 라인 {i+1} ('{(orig_line or '')[:30]}...') TTS 생성 성공. 파일: {path}")
+            except Exception as e:
+                print(f"오류: 라인 {i+1} ('{(orig_line or '')[:30]}...') TTS 생성 실패: {e}")
             
     print(f"디버그: 최종 생성된 오디오 파일 경로 수: {len(audio_paths)}")
     if not audio_paths:
@@ -1021,6 +1061,7 @@ def _drop_special_keep_units(s: str) -> str:
     return re.sub(r"\s{2,}", " ", s).strip()
 
 def split_script_to_lines(script_text: str, mode="llm") -> list[str]:
+    import os
     text = (script_text or "").strip()
     if not text:
         return []
@@ -1034,10 +1075,19 @@ def split_script_to_lines(script_text: str, mode="llm") -> list[str]:
     if mode == "newline":
         return base_lines
 
-    # mode == "llm": 각 줄을 breath_linebreaks에 넣되, honor_newlines=True로 추가 분절 방지
+    # mode == "llm": 기본적으로 LLM(breath_linebreaks) 호출을 비활성화합니다.
+    # 환경변수 USE_SSML_LLM=1 으로 원래 LLM 기반 분절을 복원할 수 있습니다.
+    use_llm = os.getenv("USE_SSML_LLM", "0") == "1"
     out = []
     for line in base_lines:
-        out.extend(breath_linebreaks(line, honor_newlines=True))
+        if use_llm:
+            try:
+                out.extend(breath_linebreaks(line, honor_newlines=True))
+            except Exception:
+                out.append(line)
+        else:
+            # 결정적 폴백: 라인을 그대로 사용 (순차 LLM 호출 회피)
+            out.append(line)
     return out
 
 # --- 변경 2: generate_subtitle_from_script 시그니처/로직 확장 ---
@@ -1095,10 +1145,18 @@ def generate_subtitle_from_script(
 
     for ln in clean_lines:
         ln_for_ssml = koreanize_if_english(ln)   # ★ 영문이면 의미 동일 한국어로
-        try:
-            frag = convert_line_to_ssml(ln_for_ssml)  # <prosody>...</prosody> (+ <break/>)
-        except Exception:
-            frag = f'<prosody rate="150%" volume="medium">{_xml_escape(ln_for_ssml)}</prosody>'
+        # 성능 최적화: 기본적으로 OpenAI/LLM 기반 SSML 변환을 비활성화합니다.
+        # 필요 시 환경변수 USE_SSML_LLM=1 으로 복원하세요.
+        import os
+        use_llm = os.getenv("USE_SSML_LLM", "0") == "1"
+        if use_llm:
+            try:
+                frag = convert_line_to_ssml(ln_for_ssml)  # <prosody>...</prosody> (+ <break/>)
+            except Exception:
+                frag = f'<prosody rate="150%" volume="medium">{_xml_escape(ln_for_ssml)}</prosody>'
+        else:
+            # 결정적 폴백: 간단한 prosody 래핑만으로 Polly/ElevenLabs에 텍스트 전송
+            frag = f'<prosody rate="155%" volume="medium">{_xml_escape(ln_for_ssml)}</prosody>'
 
         safe = _validate_ssml(frag)
         if not safe.strip().startswith("<speak"):

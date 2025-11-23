@@ -16,6 +16,7 @@ from elevenlabs_tts import TTS_ELEVENLABS_TEMPLATES, TTS_POLLY_VOICES
 from generate_timed_segments import (
     generate_subtitle_from_script,
     generate_ass_subtitle,
+    split_script_to_lines,
     SUBTITLE_TEMPLATES,
     _auto_split_for_tempo,
     dedupe_adjacent_texts,   # 쓰시면 유지, 안쓰면 빼셔도 됩니다
@@ -37,6 +38,8 @@ import os
 import requests
 import re
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 import hashlib as _hl
 import pandas as pd
 from io import BytesIO
@@ -1209,11 +1212,12 @@ with st.sidebar:
                         tmpl = st.session_state.selected_tts_template if provider == "elevenlabs" else st.session_state.selected_polly_voice_key
                         
                         script_text = koreanize_if_english(final_script_for_video)
-                        sentence_lines = breath_linebreaks(script_text, honor_newlines=False, log=False)
+                        # split_script_to_lines honors the USE_SSML_LLM env toggle (avoid LLM by default)
+                        sentence_lines = split_script_to_lines(script_text, mode="llm")
                         script_text_for_tts = "\n".join(sentence_lines)
-                        
+
                         # ✅ 토큰 없이 로그 만들 수 있도록 세션에 저장
-                        st.session_state["_orig_lines_for_tts"] = sentence_lines[:]   # 원문 라인(브레스 결과)
+                        st.session_state["_orig_lines_for_tts"] = sentence_lines[:]   # 원문 라인(브레스/분절 결과)
                         st.session_state["_used_br_lines"]      = sentence_lines[:]   # 브레스 라인 그대로
                         
                         segments, audio_clips, ass_path = generate_subtitle_from_script(
@@ -1431,12 +1435,16 @@ with st.sidebar:
                             for i, q in enumerate(per_sentence_queries, start=1):
                                 st.write(f"🧩 문장 {i} 키워드(정규화): {q}")
 
-                            # 4) 문장별로 영상 1개씩 검색
+                            # 4) 문장별로 영상 1개씩 검색 (병렬화)
                             video_paths = []
 
+                            # Lock to protect session_state updates across threads
+                            search_lock = threading.Lock()
+
                             def _try_search_once(q: str, clip_idx: int):
-                                # 키워드별 다음 페이지 커서 (기본 1)
-                                pg = st.session_state.query_page_cursor.get(q, 1)
+                                # 키워드별 다음 페이지 커서 (기본 1) - 읽기/쓰기 시 락 사용
+                                with search_lock:
+                                    pg = st.session_state.query_page_cursor.get(q, 1)
                                 paths, ids = generate_videos_for_topic(
                                     query=q,
                                     num_videos=1,
@@ -1448,28 +1456,48 @@ with st.sidebar:
                                 )
                                 if paths:
                                     # 성공 → 다음에 같은 키워드 쓰면 다음 페이지부터
-                                    st.session_state.query_page_cursor[q] = pg + 1
-                                    st.session_state.seen_video_ids.update(ids)
+                                    with search_lock:
+                                        st.session_state.query_page_cursor[q] = pg + 1
+                                        try:
+                                            st.session_state.seen_video_ids.update(ids)
+                                        except Exception:
+                                            # session_state may not be set in some contexts
+                                            pass
                                 return paths
 
-                            for clip_idx, q in enumerate(per_sentence_queries, start=1):
-                                st.write(f"🎞️ 문장 {clip_idx} 검색: {q}")
-
+                            def _worker_search(q: str, clip_idx: int):
+                                # Try original query
+                                st.write(f"🎞️ 문장 {clip_idx} 검색(요청 큐잉): {q}")
                                 got = _try_search_once(q, clip_idx)
-
-                                # 콤마로 나뉜 구문이면 조각별로도 재시도
-                                if not got and ("," in q):
+                                if got:
+                                    return got
+                                # Try comma pieces
+                                if "," in q:
                                     for piece in [p.strip() for p in q.split(",") if p.strip()]:
                                         got = _try_search_once(piece, clip_idx)
-                                        if got: break
-
-                                # 그래도 없으면 키워드 정규화 후 한 번 더
-                                if not got:
-                                    fb = _normalize_scene_query(q)
+                                        if got:
+                                            return got
+                                # Try normalized query
+                                fb = _normalize_scene_query(q)
+                                if fb and fb != q:
                                     got = _try_search_once(fb, clip_idx)
+                                    if got:
+                                        return got
+                                return None
 
-                                if got:
-                                    video_paths.extend(got)
+                            max_workers = min(8, max(1, len(per_sentence_queries)))
+                            futures = []
+                            with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                                for clip_idx, q in enumerate(per_sentence_queries, start=1):
+                                    futures.append(ex.submit(_worker_search, q, clip_idx))
+
+                                for fut in as_completed(futures):
+                                    try:
+                                        got = fut.result()
+                                        if got:
+                                            video_paths.extend(got)
+                                    except Exception as e:
+                                        print(f"영상 검색/다운로드 에러(병렬): {e}")
 
                             # 5) 길이 보정
                             # 🔁 중복 제거(경로/내용 기반)
